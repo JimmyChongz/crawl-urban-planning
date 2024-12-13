@@ -18,5 +18,5 @@
   $ python3 crawl.py
   ```
 
-  
-
+* Result
+  下載結果會轉換成 SHP(shapefile) 文件，存到當前的資料夾目錄中。

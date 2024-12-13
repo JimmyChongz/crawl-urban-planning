@@ -8,6 +8,10 @@ import json
 import time
 from arcgis2geojson import arcgis2geojson
 from tqdm import tqdm
+from pyproj import Transformer
+import shutil
+from shapely.geometry import shape
+import geopandas as gpd
 
 SLEEP_TIME=4
 
@@ -27,6 +31,60 @@ county_headers = {"Sec-Ch-Ua": "\" Not A;Brand\";v=\"99\", \"Chromium\";v=\"96\"
 html_page = session.get(county_url, headers=county_headers, cookies=county_cookies)
 soup = BeautifulSoup(html_page.text, "html.parser")
 element = soup.find("select", {"id": "COUNTY_0101"}).findAll('option')
+transformer = Transformer.from_crs("EPSG:3857", "EPSG:3826", always_xy=True)
+
+# 將 WGS84 (EPSG:3857) 座標轉換成 TWD97 (EPSG:3826) 座標
+def transformation(file_name):
+    # 讀取 JSON 檔案
+    with open(f'{file_name}.json', 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        # 處理 JSON 中的座標
+        for feature in data['features']:
+            geometry = feature['geometry']
+            if geometry['type'] == 'Polygon':
+                geometry['coordinates'] = [convert_coordinates(ring) for ring in geometry['coordinates']]
+        # 將轉換後的座標寫回新 JSON 檔案
+        with open(f'{file_name}.json', 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+        print(f"座標轉換完成，輸出已保存為{file_name}.json")
+
+# 定義函數來轉換座標
+def convert_coordinates(coords):
+    return [transformer.transform(x, y) for x, y in coords]
+
+def convert_to_shp(file_name):
+    # 讀取 GeoJSON 文件
+    input_file = f'{file_name}.json'
+    output_folder = f'{file_name}'
+
+    # 建立輸出資料夾
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    # SHP 輸出文件的完整路徑
+    output_file = os.path.join(output_folder, f'{file_name}.shp')
+
+    with open(input_file, 'r', encoding='utf-8') as f:
+        geojson_data = json.load(f)
+
+    # 將 GeoJSON 轉換為 GeoDataFrame
+    gdf = gpd.GeoDataFrame.from_features(geojson_data["features"])
+
+    # 設定座標系統為 TWD97 (EPSG:3826)
+    gdf.set_crs("EPSG:3826", inplace=True)
+
+    # 將 GeoDataFrame 存儲為 SHP 文件
+    gdf.to_file(output_file, driver='ESRI Shapefile')
+
+    # 確保所有輸出檔案都在資料夾內
+    shp_files = [f for f in os.listdir() if f.startswith(f'{file_name}') and not f.endswith('.py')]
+    for file in shp_files:
+        dest_file = os.path.join(output_folder, file)
+        if os.path.exists(dest_file):
+            os.remove(dest_file)  # 刪除已存在的檔案以便覆蓋
+        shutil.move(file, output_folder)
+
+    print(f"轉換成功，SHP檔案已打包到資料夾: {output_folder}")
 
 county2id = {}
 for e in element:
@@ -168,6 +226,8 @@ class TK_Window():
             res = session.post(geometry_url, headers=geometry_headers, cookies=geometry_cookies, data=geometry_data).json()
             del res['spatialReference']
             json.dump(arcgis2geojson(res), open(os.path.join(self.path, f'{self.urbanPlanCombobox.get()}.json'), "w")) 
+            transformation(f'{self.urbanPlanCombobox.get()}')
+            convert_to_shp(f'{self.urbanPlanCombobox.get()}')
             self.progressBar['value'] = self.progressBar["maximum"]
             self.labelProgress['text'] = '100.00%'
         else:
@@ -190,6 +250,9 @@ class TK_Window():
             self.labelProgress['text'] = '100.00%'
             self.window.update()
             json.dump(combine_json, open(os.path.join(self.path, f'{self.countyCombobox.get()}_ALL.json'), "w")) 
+            transformation(f'{self.countyCombobox.get()}_ALL')
+            convert_to_shp(f'{self.countyCombobox.get()}_ALL')
+
             
     
     def save_plans(self):
@@ -204,7 +267,9 @@ class TK_Window():
             geometry_data = {"VAL1": self.plan_id, "VAL2" : self.plans_id}
             res = session.post(geometry_url, headers=geometry_headers, cookies=geometry_cookies, data=geometry_data).json()
             del res['spatialReference']
-            json.dump(arcgis2geojson(res), open(os.path.join(self.path, f'{self.urbanPlansCombobox.get()}.json'), "w")) 
+            json.dump(arcgis2geojson(res), open(os.path.join(self.path, f'{self.urbanPlansCombobox.get()}.json'), "w"))
+            transformation(f'{self.urbanPlansCombobox.get()}')
+            convert_to_shp(f'{self.urbanPlansCombobox.get()}')
             self.progressBar['value'] = self.progressBar["maximum"]
             self.labelProgress['text'] = '100.00%'
         else:
@@ -213,7 +278,9 @@ class TK_Window():
                 geometry_data = {"VAL1": self.plan_id, "VAL2" : plans_id}
                 res = session.post(geometry_url, headers=geometry_headers, cookies=geometry_cookies, data=geometry_data).json()
                 del res['spatialReference']
-                json.dump(arcgis2geojson(res), open(os.path.join(self.path, f'{plans_name}.json'), "w")) 
+                json.dump(arcgis2geojson(res), open(os.path.join(self.path, f'{plans_name}.json'), "w"))
+                transformation(plans_name)
+                convert_to_shp(plans_name)
                 self.progressBar['value'] = i * interval
                 self.labelProgress['text'] = f"{self.progressBar['value']:5.2f}%"
                 self.window.update()
@@ -221,6 +288,6 @@ class TK_Window():
         self.progressBar['value'] = self.progressBar["maximum"]
         self.labelProgress['text'] = '100.00%'
         self.window.update()
+        
 tk_window = TK_Window()
 tk_window.main()
-
